@@ -51,6 +51,8 @@ public static class I18n
             case "Stopped": text = en ? "Stopped" : "停止"; break;
             case "TunElevateMsg": text = en ? "Enabling TUN virtual network mode requires Administrator privileges.\n\nClick [OK] to request elevation and restart the tray." : "开启 TUN 虚拟网卡模式需要管理员权限。\n\n点击【确定】将请求管理员权限并平滑重启托盘服务以开启 TUN。"; break;
             case "TunElevateTitle": text = en ? "TUN Mode Elevation" : "TUN 模式提权提示"; break;
+            case "StartupTunAdminMsg": text = en ? "TUN mode is enabled in your configuration, but MihomoTray is running without Administrator privileges.\n\nClick [OK] to request Administrator privileges to run TUN properly, or click [Cancel] to continue as a standard user." : "检测到您在设置中开启了 TUN 虚拟网卡模式，但当前程序以普通权限运行。\n\n点击【确定】将请求管理员权限以正常运行 TUN 模式，点击【取消】将以普通权限继续运行。"; break;
+            case "StartupTunAdminTitle": text = en ? "TUN Mode Administrator Required" : "TUN 模式权限提示"; break;
             case "AnotherInstance": text = en ? "MihomoTray is already running!" : "Mihomo 托盘程序已经在运行中！"; break;
             default: text = key; break;
         }
@@ -259,6 +261,43 @@ public class TrayApplicationContext : ApplicationContext
         config = AppConfig.Load(configFilePath);
         I18n.CurrentLang = config.Language;
 
+        // Startup check: If TUN mode is enabled in config but process lacks admin rights, prompt for elevation
+        bool isTunOn = IsTunConfigEnabled();
+        bool isAdmin = IsRunAsAdmin();
+
+        if (isTunOn && !isAdmin)
+        {
+            DialogResult dr = MessageBox.Show(
+                I18n.T("StartupTunAdminMsg"),
+                I18n.T("StartupTunAdminTitle"),
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Question);
+
+            if (dr == DialogResult.OK)
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = Application.ExecutablePath,
+                    WorkingDirectory = baseDir,
+                    UseShellExecute = true,
+                    Verb = "runas"
+                };
+
+                try
+                {
+                    Program.ReleaseAndCloseMutex();
+                    Process.Start(psi);
+                    Environment.Exit(0);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Program.Log("Startup elevation request failed: " + ex.Message);
+                    try { Program.appMutex = new Mutex(false, "Local\\MihomoTrayManagerApp_Lock"); } catch { }
+                }
+            }
+        }
+
         contextMenu = new ContextMenuStrip();
 
         statusItem = new ToolStripMenuItem { Enabled = false };
@@ -356,7 +395,7 @@ public class TrayApplicationContext : ApplicationContext
 
         StartCore();
         UpdateStatus();
-        Program.Log("TrayApplicationContext initialized. Lang=" + I18n.CurrentLang);
+        Program.Log("TrayApplicationContext initialized. Lang=" + I18n.CurrentLang + ", Admin=" + IsRunAsAdmin());
     }
 
     private void SwitchLanguage(string lang)
